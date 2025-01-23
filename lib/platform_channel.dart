@@ -43,12 +43,20 @@ class DeviceAdminManager {
   }
 
   static Future<void> launchApp(String packageName) async {
-  try {
-    final result = await platform.invokeMethod('launchApp', {'packageName': packageName});
-    print(result);
-  } on PlatformException catch (e) {
-    print("Error launching app: ${e.message}");
+    try {
+      final result = await platform.invokeMethod('launchApp', {'packageName': packageName});
+      print(result);
+    } on PlatformException catch (e) {
+      print("Error launching app: ${e.message}");
+    }
   }
-}
 
+  static Future<void> setLock(String packageName) async {
+    try {
+      final result = await platform.invokeMethod('setLock', {'packageName': packageName});
+      print(result);
+    } on PlatformException catch (e) {
+      print("Error setting lock: ${e.message}");
+    }
+  }
 }

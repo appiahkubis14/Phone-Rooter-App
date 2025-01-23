@@ -58,6 +58,14 @@ class MainActivity : FlutterActivity() {
                         result.error("INVALID_ARGUMENT", "Package name is null or invalid", null)
                     }
                 }
+                "setLock" -> {
+                    val packageName = call.argument<String>("packageName")
+                    if (packageName != null) {
+                        setLock(packageName, result)
+                    } else {
+                        result.error("INVALID_ARGUMENT", "Package name is null or invalid", null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -211,6 +219,22 @@ class MainActivity : FlutterActivity() {
         }
     }
     
+    private fun setLock(packageName: String, result: MethodChannel.Result) {
+        try {
+            // Ensure that the app has device admin privileges
+            if (devicePolicyManager.isAdminActive(componentName)) {
+                // Set the device to lock task mode (single app mode) and allow only this app to be used
+                devicePolicyManager.setLockTaskPackages(componentName, arrayOf(packageName))
+                startLockTask() // This will lock the device to the specified package
+
+                result.success("Device locked into $packageName")
+            } else {
+                result.error("DEVICE_ADMIN_NOT_ACTIVE", "Device admin is not active", null)
+            }
+        } catch (e: Exception) {
+            result.error("SET_LOCK_FAILED", "Failed to lock device into app", null)
+        }
+    }
     
     
 
