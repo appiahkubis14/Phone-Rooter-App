@@ -1,32 +1,35 @@
 import 'dart:io';
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class AppDownloader {
-  /// Downloads an APK file from a URL and saves it to the specified directory.
   static Future<String> downloadApk(String url, String fileName) async {
     try {
+      if (Platform.isAndroid) {
+        PermissionStatus storagePermission = await Permission.storage.request();
+        if (!storagePermission.isGranted) {
+          throw Exception("Storage permission denied.");
+        }
+      }
+
       final response = await http.get(Uri.parse(url));
-
       if (response.statusCode == 200) {
-        // Specify a custom directory path (e.g., Downloads folder)
-        final directoryPath = "/storage/emulated/0/Download";
+        final directory = await getExternalStorageDirectory();
+        final directoryPath = directory?.path ?? "/storage/emulated/0/Download";
 
-        // Ensure the directory exists
-        final directory = Directory(directoryPath);
-        if (!directory.existsSync()) {
-          directory.createSync(recursive: true);
+        final dir = Directory(directoryPath);
+        if (!dir.existsSync()) {
+          dir.createSync(recursive: true);
         }
 
-        // Define the file path
         final filePath = "$directoryPath/$fileName.apk";
-
-        // Save the APK file
         final file = File(filePath);
         await file.writeAsBytes(response.bodyBytes);
 
-        return filePath; // Return the path of the downloaded file
+        return filePath;
       } else {
-        throw Exception("Failed to download APK: HTTP ${response.statusCode}");
+        throw Exception("Failed to download APK: ${response.statusCode}");
       }
     } catch (e) {
       throw Exception("Error downloading APK: $e");

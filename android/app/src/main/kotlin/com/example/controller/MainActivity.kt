@@ -1,164 +1,239 @@
 package com.example.controller
 
-import android.app.Activity
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
-import android.widget.EditText
+import android.util.Log
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
-import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
-import org.json.JSONArray
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
+import kotlinx.coroutines.*
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.io.InputStream
 import java.net.URL
+import android.provider.Settings 
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.example.controller"
     private lateinit var devicePolicyManager: DevicePolicyManager
     private lateinit var componentName: ComponentName
-    private val validPins = listOf("1234", "5678", "91011") // Replace with your actual pins
-    private val apiUrl = "https://cocoarehabmonitor.com/media/Cocoa_Monitor_V5.apk" // Replace with your actual API URL
+
+    companion object {
+        private const val TAG = "MainActivity"
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Initialize DevicePolicyManager for device admin functionalities
         devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
         componentName = ComponentName(this, MyDeviceAdminReceiver::class.java)
 
         MethodChannel(flutterEngine!!.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "enableDeviceAdmin" -> enableDeviceAdmin(result)
-                "exitKioskMode" -> exitKioskMode(result)
-                "installApps" -> installApps(result)
+                "lockDevice" -> lockDevice(result)
+                "unlockDevice" -> unlockDevice(result)
+                "downloadAndInstallApp" -> {
+                    val url = call.argument<String>("url")
+                    val appName = call.argument<String>("appName") ?: "UnknownApp"
+                    if (url != null) {
+                        downloadAndInstallApp(url, appName, result)
+                    } else {
+                        result.error("INVALID_ARGUMENT", "URL is null or invalid", null)
+                    }
+                }
+                "launchApp" -> {
+                    val packageName = call.argument<String>("packageName")
+                    if (packageName != null) {
+                        launchApp(packageName, result)
+                    } else {
+                        result.error("INVALID_ARGUMENT", "Package name is null or invalid", null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
+    }
 
-        // Automatically enable device admin and lock the device into kiosk mode
+
+    private fun enableDeviceAdmin(result: MethodChannel.Result) {
         if (devicePolicyManager.isAdminActive(componentName)) {
-            lockDevice()
+            result.success("Device Admin already enabled")
         } else {
-            enableDeviceAdmin()
-        }
-    }
-
-    private fun enableDeviceAdmin(result: MethodChannel.Result? = null) {
-        val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
-        intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, componentName)
-        intent.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "This app requires device admin access.")
-        startActivityForResult(intent, 1)
-        result?.success(null)
-    }
-
-    private fun lockDevice(result: MethodChannel.Result? = null) {
-        if (devicePolicyManager.isAdminActive(componentName)) {
-            startLockTask()
-            result?.success(null)
-        } else {
-            result?.error("DEVICE_ADMIN_NOT_ACTIVE", "Device admin is not active", null)
-        }
-    }
-
-    private fun exitKioskMode(result: MethodChannel.Result) {
-        showPinDialog {
-            stopLockTask() // Exit kiosk mode
-            Toast.makeText(this, "Exited kiosk mode", Toast.LENGTH_SHORT).show()
-            result.success("Exited kiosk mode")
-        }
-    }
-
-    private fun showPinDialog(onSuccess: () -> Unit) {
-        val builder = AlertDialog.Builder(this)
-        val input = EditText(this)
-        input.inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
-        builder.setTitle("Enter PIN to Exit")
-            .setView(input)
-            .setPositiveButton("OK") { dialog, _ ->
-                val pin = input.text.toString()
-                if (isValidPin(pin)) {
-                    onSuccess()
-                    dialog.dismiss()
-                } else {
-                    Toast.makeText(this, "Invalid PIN", Toast.LENGTH_SHORT).show()
-                }
+            val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, componentName)
+                putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "This app requires device admin access.")
             }
-            .setNegativeButton("Cancel") { dialog, _ -> dialog.cancel() }
-        builder.show()
-    }
-
-    private fun isValidPin(pin: String): Boolean {
-        return validPins.contains(pin)
-    }
-
-    private fun installApps(result: MethodChannel.Result) {
-        val apkUrls = fetchAppsToInstall(apiUrl)
-        if (apkUrls.isNotEmpty()) {
-            for (apkUrl in apkUrls) {
-                val success = installAppWithRoot(apkUrl)
-                if (!success) {
-                    result.error("INSTALL_FAILED", "Failed to install app from $apkUrl", null)
-                    return
-                }
-            }
-            result.success("All apps installed successfully")
-        } else {
-            result.error("NO_APPS", "No apps to install", null)
+            startActivityForResult(intent, 1)
+            result.success("Device Admin requested")
         }
     }
 
-    private fun fetchAppsToInstall(apiUrl: String): List<String> {
-        val urls = mutableListOf<String>()
+    private fun lockDevice(result: MethodChannel.Result) {
         try {
-            val url = URL(apiUrl)
-            val connection = url.openConnection() as HttpURLConnection
-            connection.requestMethod = "GET"
-
-            val reader = BufferedReader(InputStreamReader(connection.inputStream))
-            val response = StringBuilder()
-            var line: String?
-
-            while (reader.readLine().also { line = it } != null) {
-                response.append(line)
-            }
-
-            // Parse the response (e.g., JSON array of URLs)
-            val jsonArray = JSONArray(response.toString())
-            for (i in 0 until jsonArray.length()) {
-                urls.add(jsonArray.getString(i))
+            if (devicePolicyManager.isAdminActive(componentName)) {
+                startLockTask()
+                result.success("Device locked successfully")
+            } else {
+                result.error("LOCK_FAILED", "Device admin not active", null)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            result.error("LOCK_FAILED", "Error locking device: ${e.message}", null)
         }
-        return urls
     }
 
-    private fun installAppWithRoot(apkPath: String): Boolean {
-        return try {
-            val process = Runtime.getRuntime().exec("su")
-            val outputStream = process.outputStream
-            outputStream.write(("pm install -r $apkPath\n").toByteArray())
-            outputStream.flush()
-            outputStream.close()
-
-            val bufferedReader = BufferedReader(InputStreamReader(process.inputStream))
-            var line: String?
-            val output = StringBuilder()
-            while (bufferedReader.readLine().also { line = it } != null) {
-                output.append(line)
-            }
-            process.waitFor()
-
-            process.exitValue() == 0
+    private fun unlockDevice(result: MethodChannel.Result) {
+        try {
+            stopLockTask() // Unlocks the device from the app
+            result.success("Device unlocked successfully")
         } catch (e: Exception) {
-            e.printStackTrace()
-            false
+            result.error("UNLOCK_FAILED", "Error unlocking device: ${e.message}", null)
+        }
+    }
+
+    private fun downloadAndInstallApp(apkUrl: String, appName: String, result: MethodChannel.Result) {
+        Log.d(TAG, "Starting download for app: $appName from $apkUrl")
+        
+        // Check if the app has permission to install unknown apps
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+            // If not, redirect to the settings to allow the permission
+            val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                data = Uri.parse("package:$packageName") // Set the URI to the current app
+            }
+            Log.e(TAG, "Install unknown apps permission is required")
+            result.error(
+                "PERMISSION_DENIED",
+                "Install unknown apps permission is required. Redirecting to settings...",
+                null
+            )
+            startActivity(intent) // Start the intent to open the settings page for permission
+            return
+        }
+        
+        // Proceed with downloading and installing the APK
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val apkFileName = "$appName.apk"
+                val apkFilePath = "${applicationContext.getExternalFilesDir(null)}/$apkFileName"
+                val apkFile = File(apkFilePath)
+        
+                Log.d(TAG, "Connecting to URL: $apkUrl")
+                val url = URL(apkUrl)
+                val connection = url.openConnection()
+                connection.connect()
+        
+                Log.d(TAG, "Downloading APK file to: $apkFilePath")
+                val inputStream: InputStream = connection.getInputStream()
+        
+                FileOutputStream(apkFile).use { outputStream ->
+                    inputStream.copyTo(outputStream)
+                }
+        
+                if (!apkFile.exists() || apkFile.length() == 0L) {
+                    throw IOException("Failed to download the APK file or file is empty")
+                }
+        
+                Log.d(TAG, "APK file downloaded successfully: $apkFilePath")
+                val uri: Uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.provider", apkFile)
+        
+                withContext(Dispatchers.Main) {
+                    Log.d(TAG, "Starting APK installation for: $apkFileName")
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, "application/vnd.android.package-archive")
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    }
+                    startActivity(intent)
+    
+                    // Notify Flutter app about the installation process
+                    result.success("APK installation started successfully")
+                    
+                    // Log after the installation attempt
+                    Log.d(TAG, "Installation process triggered. Please check the device for the app.")
+                }
+            } catch (e: IOException) {
+                Log.e(TAG, "IOException occurred: ${e.message}", e)
+                withContext(Dispatchers.Main) {
+                    result.error("IO_EXCEPTION", "Error during file operation: ${e.message}", null)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Unexpected error occurred: ${e.message}", e)
+                withContext(Dispatchers.Main) {
+                    result.error("DOWNLOAD_INSTALL_FAILED", "Unexpected error: ${e.message}", null)
+                }
+            }
+        }
+    }
+    
+    private fun launchApp(packageName: String, result: MethodChannel.Result) {
+        try {
+            val packageManager = packageManager
+    
+            // Log all installed packages on the device to help verify the correct package name
+            val installedPackages = packageManager.getInstalledPackages(0)
+            installedPackages.forEach {
+                Log.d("InstalledApp", "Installed package: ${it.packageName}")
+            }
+    
+            // Check if the app is installed and get the launch intent
+            val intent: Intent? = packageManager.getLaunchIntentForPackage(packageName)
+    
+            // Log the package name and intent for debugging
+            Log.d("LaunchApp", "Package: $packageName, Intent: $intent")
+    
+            // Check if the intent is null (meaning the app is not installed)
+            if (intent != null) {
+                // Ensure the intent has the necessary flag to launch the app
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    
+                // Start the app on the UI thread to avoid issues
+                runOnUiThread {
+                    startActivity(intent)
+                }
+    
+                result.success("Launching app: $packageName")
+            } else {
+                // If the app is not installed, just return an error without opening Play Store
+                Log.w("LaunchApp", "App not found: $packageName")
+                result.error("APP_NOT_FOUND", "App with package name $packageName not found.", null)
+            }
+        } catch (e: Exception) {
+            // Catch any unexpected errors and log them
+            Log.e("LaunchApp", "Error launching app", e)
+            result.error("ERROR", "Error launching app: ${e.message}", null)
+        }
+    }
+    
+    
+    
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus && devicePolicyManager.isAdminActive(componentName)) {
+            // Toast.makeText(this, "Press Back + Recent simultaneously to exit", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onBackPressed() {
+        if (devicePolicyManager.isAdminActive(componentName)) {
+            // Toast.makeText(this, "App is locked. You cannot go back.", Toast.LENGTH_SHORT).show()
+        } else {
+            super.onBackPressed()
+        }
+    }
+
+    override fun onUserLeaveHint() {
+        if (devicePolicyManager.isAdminActive(componentName)) {
+            // Toast.makeText(this, "App is locked. Press Back + Recent simultaneously to exit.", Toast.LENGTH_SHORT).show()
+        } else {
+            super.onUserLeaveHint()
         }
     }
 }

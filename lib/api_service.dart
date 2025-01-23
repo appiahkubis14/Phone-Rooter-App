@@ -1,26 +1,11 @@
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-
 class ApiService {
-  static const String apiUrl = "https://yourapi.com/apps";
+  static const String apiUrl = "https://cocoarehabmonitor.com/media/Cocoa_Monitor_V5.apk";
 
-  static Future<List<Map<String, String>>> fetchApps() async {
-  try {
-    final response = await http.get(Uri.parse(apiUrl));
-    if (response.statusCode == 200) {
-      List<dynamic> data = json.decode(response.body);
-      return data.map((app) {
-        return {
-          "app_name": app["app_name"] as String,
-          "apk_url": app["apk_url"] as String,
-        };
-      }).toList();
-    } else {
-      throw Exception("Failed to load apps");
+  static Future<String> getApkUrl() async {
+    try {
+      return apiUrl;
+    } catch (e) {
+      throw Exception("Error fetching APK URL: $e");
     }
-  } catch (e) {
-    throw Exception("Error fetching apps: $e");
   }
-}
-
 }
